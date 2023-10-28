@@ -1,0 +1,107 @@
+$Path = " "
+$OutputPath = " "
+
+$Files = Get-ChildItem $Path | Where-Object {$_.Extension -like ".evt"}
+
+foreach ($el in $Files)
+{
+    $infile = $Path + "\" + $el.Name
+    $outfile = $OutputPath + "\" + ($el.BaseName + ".csv")
+
+    if (-not(Test-Path $outfile)) { 
+        $initem = Get-Item $infile
+        $directory = $initem.Directory.FullName
+
+        try {
+            $events = Get-WinEvent -Path $infile -Oldest
+        }
+        catch {
+            Write-Host "Error reading the event log file: $_"
+            continue
+        }
+
+        $fields = @()
+        $fields += "Message"
+
+        $lines = @()
+
+        foreach ($Event in $events)
+        {
+            $line = [ordered]@{}
+
+            $message = $Event.Message -split "\n" | Where-Object {$_ -notlike "закрытие дескриптора*"}
+
+            $line.Add("Message", ($message[0] -replace "`r"))
+
+            $line.Add("TimeCreated", $Event.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss.fff"))
+
+            $xml = [xml]($Event.ToXml())
+
+            $unlabeled_fields = @()
+
+            foreach ($s in $xml.Event.System.ChildNodes)
+            {
+                if ($s.InnerText)
+                {
+                    $line.Add($s.Name, $s.InnerText)
+                }
+            }
+
+            foreach ($d in $xml.Event.EventData.Data)
+            {
+                if ($d.Name)
+                {
+                    $text = $d.InnerText
+                    if ($text -eq $null)
+                    {
+                        $text = ""
+                    }
+                    $text = $text.replace("`n", "\n").replace("`r","\n")
+
+                    $line.Add($d.Name, $text)
+                }
+                elseif ($d)
+                {
+                    $text = $d
+                    $text = $text.replace("`n","\n").replace("`r","\n")
+
+                    $newfield = "unlabeled" + ([int]$unlabeled_fields.count + 1)
+                    $unlabeled_fields += $newfield
+                    $line.Add($newfield, $text)
+                }
+            }
+
+            foreach ($f in $unlabeled_fields)
+            {
+                if ($fields -notcontains $f)
+                {
+                    $fields += $f
+                }
+            }
+
+            $lines += $line
+        }
+
+        try {
+            $output_file = [System.IO.File]::CreateText("$([System.IO.Path]::Combine($directory, $outfile))")
+            $output_file.WriteLine(($fields -join ","))
+
+            foreach ($line in $lines)
+            {
+                $output_file.WriteLine(($line.Keys | ForEach-Object {$line[$_].ToString()}) -join ",")
+            }
+
+            $output_file.Flush()
+            $output_file.Close()
+
+            Write-Host "Output file created successfully."
+        }
+        catch {
+            Write-Host "Error creating the output file: $_"
+        }
+    }
+    else
+    {
+        Write-Host "Skipping $infile. The corresponding CSV file already exists."
+    }
+}
